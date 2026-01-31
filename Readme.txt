@@ -1,9 +1,9 @@
+sudo apt update && sudo apt upgrade -y
+
 sudo apt update
 sudo apt install nodejs npm git
 
 git clone https://github.com/pedroslopez/whatsapp-web.js
-
-sudo apt update && sudo apt upgrade -y
 
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
