@@ -1,3 +1,9 @@
+const {
+  checkWeatherAlerts,
+  getCurrentSMNAlert
+} = require("./alerts/weather");
+const ZONA = "Bahía Blanca";
+
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const net = require('net');
@@ -36,12 +42,34 @@ const client = new Client({
   }
 });
 
-const WELCOME_MESSAGE = "👋 Bienvenido al gateway de LW7EEA\nPara enviar un mensaje a APRS utilice @LUXXXX o #291XXXXXXX\nPara guardar un alias use: #SET alias numero\nPara borrar un alias: #RM alias";
+const WELCOME_MESSAGE =
+"👋 Gateway APRS–WhatsApp LW7EEA\n" +
+"Enviar: @CALL mensaje | #NUM mensaje\n" +
+"Alias: #SET CALL NUM | #RM CALL\n" +
+"Clima: #WX (Alertas SMN)";
 
 let aprs;
 
 // ================= Mensajes WhatsApp → APRS =================
-client.on('message', message => {
+client.on('message', async message => {
+
+// ===== COMANDO #WX (WhatsApp) =====
+if (message.body.trim().toUpperCase() === "#WX") {
+  getCurrentSMNAlert(alert => {
+    if (!alert) {
+      message.reply("🌤 SMN: sin alertas meteorológicas vigentes");
+    } else {
+      message.reply(
+`🌩 ALERTA SMN (ACP)
+Zona: Bahía Blanca
+${alert.title}
+
+${alert.description}`.substring(0, 700)
+      );
+    }
+  });
+  return;
+}
   console.log("MENSAJE RECIBIDO", message.from, message.body);
 
   if (BLOCKED_IDS.includes(message.from)) {
@@ -67,11 +95,24 @@ client.on('message', message => {
     return;
   }
 
+
+
+
+
+
+
   const dest = match[1].toUpperCase();
   const text = match[2].substring(0, 67);
-  let fromWA = message.from.replace("@c.us", "");
 
-  const aprsText = `Mensaje de ${fromWA}: ${text}`;
+// Obtener nombre o alias
+let fromWA = message.from.replace("@c.us", "");
+let contact = await client.getContactById(message.from);
+let senderName = CONTACTS[fromWA] || contact.pushname || fromWA;
+
+// Luego en el paquete APRS:
+const aprsText = `Mensaje de ${senderName}: ${text}`;
+
+
   const packet = `${CALLSIGN}>APRS::${dest.padEnd(9)}:${aprsText.substring(0,67)}\n`;
 
   console.log("📡 ENVIANDO A APRS:", packet.trim());
@@ -85,6 +126,19 @@ client.on('qr', qr => qrcode.generate(qr, { small: true }));
 client.on('ready', () => {
   console.log("WhatsApp conectado");
   connectAPRS();
+
+setInterval(() => {
+  checkWeatherAlerts(
+    msg => {
+      // WhatsApp broadcast (admin o lista)
+      client.sendMessage("549XXXXXXXXX@c.us", msg);
+    },
+    msg => {
+      sendAPRS("ALL", msg);
+    }
+  );
+}, 10 * 60 * 1000);
+
 });
 
 client.initialize();
@@ -196,7 +250,21 @@ if (text === "#HELP" || text === "#START") {
   continue;
 }
 
-
+// ===== COMANDO #WX (APRS) =====
+if (text === "#WX") {
+  getCurrentSMNAlert(alert => {
+    if (!alert) {
+      sendAPRS(from, "🌤 SMN: sin alertas meteorológicas");
+    } else {
+      sendAPRS(
+        from,
+        `🌩 SMN ACP ${alert.title}`.substring(0, 67)
+      );
+    }
+    if (msgId) sendACK(from, msgId);
+  });
+  continue;
+}
 
       // ===== MENSAJES APRS → WHATSAPP =====
       if (text.startsWith("#")) {
