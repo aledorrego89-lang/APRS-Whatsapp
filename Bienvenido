@@ -1,0 +1,27 @@
+Gateway APRS - Whatsapp
+
+Instrucciones:
+
+Desde APRS puede enviar cualquier comando que le llegaran las instrucciones.
+
+Para enviar un mensaje a un celular:
+
+    Destino: LW7EEA-1
+    Cuerpo del msj: #NUMERO mensaje
+
+Para agendar un alias:
+
+    Destino: LW7EEA-1
+    Cuerpo del msj: #SET CALLSING numero
+
+Para borrar un alias:
+
+    Destino: LW7EEA-1
+    Cuerpo del msj: #RM CALLSING
+
+
+
+
+El sistema permite el envio de mensajes en ambas direcciones, con confirmacion de entrega y lectura.
+
+Esta en etapa de desarrollo, todas las opiniones seran bienvenidas.
