@@ -309,7 +309,7 @@ function connectAPRS() {
                     sentMessages[sentMsg.id._serialized] = { aprsFrom: from, text: msg };
                 });
 
-                // if (msgId) sendACK(from, msgId);
+                 if (msgId) sendACK(from, msgId);
                 continue;
             }
         }
