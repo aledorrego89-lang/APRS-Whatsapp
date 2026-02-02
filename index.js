@@ -4,7 +4,7 @@ const qrcode = require('qrcode-terminal');
 const net = require('net');
 const fs = require("fs");
 
-const ZONA = "Bahía Blanca";
+
 const CALLSIGN = "LW7EEA-1";
 const APRS_PASS = "19889";
 const APRS_SERVER = "rotate.aprs2.net";
@@ -49,7 +49,8 @@ const client = new Client({
 
 const WELCOME_MESSAGE =
     "👋 Gateway APRS–WhatsApp LW7EEA\n" +
-    "Enviar: @CALL mensaje | #NUM mensaje\n" +
+    "Enviar desde Wsp: @CALL-SSID mensaje \n" +
+    "Enviar desde APRS: @CALL mensaje | #NUM mensaje \n" +
     "Alias: #SET CALL NUM | #RM CALL\n" +
     "Clima: #WX (Alertas SMN)";
 
@@ -64,7 +65,10 @@ client.on('message', async message => {
                 message.reply("🌤 SMN: sin alertas meteorológicas vigentes");
             } else {
                 message.reply(
-                    `🌩 ALERTA SMN (ACP) Zona: ${ZONA} ${alert.title} ${alert.description.substring(0, 700)}`
+`🌩 ALERTA SMN (ACP)
+Zonas: ${alert.zonas.join(", ")}
+${alert.title}
+${alert.description.substring(0, 700)}`
                 );
             }
         });
@@ -120,10 +124,12 @@ client.on('ready', () => {
         checkWeatherAlerts(
             msg => {
                 // WhatsApp broadcast (admin o lista)
-                client.sendMessage("549XXXXXXXXX@c.us", msg);
+                client.sendMessage("5492921401356@c.us", msg);
             },
             msg => {
-                sendAPRS("ALL", msg);
+                //sendAPRS("ALL", msg);
+                broadcastAPRS(msg);
+
             }
         );
     }, 10 * 60 * 1000);
@@ -158,6 +164,13 @@ function sendAPRS(dest, text) {
     aprs.write(packet);
     console.log("📤 APRS OUT:", packet.trim());
 }
+
+function broadcastAPRS(text) {
+    Object.keys(CONTACTS).forEach(call => {
+        sendAPRS(call.padEnd(9), text);
+    });
+}
+
 
 function sendACK(dest, id) {
     if (!id || !aprs) return;
@@ -317,4 +330,3 @@ function connectAPRS() {
 
     aprs.on('error', err => console.log("APRS error:", err));
 }
-
