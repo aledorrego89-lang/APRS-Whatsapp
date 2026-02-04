@@ -37,10 +37,19 @@ function saveContacts() {
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
-        executablePath: '/usr/bin/chromium-browser',
-        args: ['--no-sandbox','--disable-setuid-sandbox']
+        executablePath: "/usr/bin/chromium-browser",
+        headless: true,
+        args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--single-process",
+            "--no-zygote"
+        ]
     }
 });
+
 
 const WELCOME_MESSAGE =
 `👋 Gateway APRS–WhatsApp LW7EEA
@@ -107,18 +116,7 @@ if (message.body.startsWith("#LOCK ")) {
     message.reply("✅ Enviado a APRS");
 });
 
-/* ================= ACK WhatsApp ================= */
-client.on('message_ack', (msg, ack) => {
-    const id = msg.id?._serialized;
-    if (!sentMessages[id]) return;
 
-    const info = sentMessages[id];
-    if (ack === 2) sendAPRS(info.from, "✔ ENTREGADO en WhatsApp");
-    if (ack === 3) {
-        sendAPRS(info.from, "✔✔ LEÍDO en WhatsApp");
-        delete sentMessages[id];
-    }
-});
 
 /* ================= APRS ================= */
 let aprs;
