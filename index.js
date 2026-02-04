@@ -4,138 +4,225 @@ const qrcode = require('qrcode-terminal');
 const net = require('net');
 const fs = require("fs");
 
-
+/* ===== CONFIG ===== */
 const CALLSIGN = "LW7EEA-1";
 const APRS_PASS = "19889";
 const APRS_SERVER = "rotate.aprs2.net";
 const APRS_PORT = 14580;
 const CONTACTS_FILE = "./contacts.json";
 
-// ===== TRACKING DE MENSAJES WA (ACK) =====
+/* ===== LOCKS ===== */
+const LOCKED_DEST = {};     // APRS → WhatsApp { ORIGCALL: DESTCALL }
+const WA_LOCKED_DEST = {};  // WhatsApp → APRS { chatId: CALLSIGN }
+
+/* ===== TRACKING ACK ===== */
 const sentMessages = {};
 let CONTACTS = {};
 
-// Cargar contactos
+/* ===== CONTACTOS ===== */
 if (fs.existsSync(CONTACTS_FILE)) {
     try {
         CONTACTS = JSON.parse(fs.readFileSync(CONTACTS_FILE));
         console.log("📒 Agenda cargada:", CONTACTS);
-    } catch (e) {
-        console.log("❌ Error leyendo contacts.json");
+    } catch {
         CONTACTS = {};
     }
-} else {
-    CONTACTS = { "LW2EDM": "2916450825" };
 }
 
 function saveContacts() {
     fs.writeFileSync(CONTACTS_FILE, JSON.stringify(CONTACTS, null, 2));
 }
 
-const BLOCKED_IDS = [];
-
+/* ===== WHATSAPP CLIENT ===== */
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
         executablePath: '/usr/bin/chromium-browser',
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu'
-        ]
+        args: ['--no-sandbox','--disable-setuid-sandbox']
     }
 });
 
 const WELCOME_MESSAGE =
-    "👋 Gateway APRS–WhatsApp LW7EEA\n" +
-    "Enviar desde Wsp: @CALL-SSID mensaje \n" +
-    "Enviar desde APRS: @CALL mensaje | #NUM mensaje \n" +
-    "Alias: #SET CALL NUM | #RM CALL\n" +
-    "Clima: #WX (Alertas SMN)";
+`👋 Gateway APRS–WhatsApp LW7EEA
+WhatsApp → APRS: @CALL mensaje
+APRS → WhatsApp: @CALL mensaje | #NUM mensaje
+LOCK: #LOCK CALL | #UNLOCK
+Clima: #WX`;
 
-let aprs;
-
-// ================= Mensajes WhatsApp → APRS =================
+/* ================= WHATSAPP → APRS ================= */
 client.on('message', async message => {
-    // ===== COMANDO #WX (WhatsApp) =====
+
+    /* ===== LOCK WhatsApp ===== */
+if (message.body.startsWith("#LOCK ")) {
+    const dest = message.body.split(" ")[1]?.toUpperCase();
+
+    // Validar CALLSIGN APRS, NO agenda
+    if (!dest || !/^[A-Z0-9]{3,6}(-\d{1,2})?$/.test(dest)) {
+        message.reply("❌ Uso: #LOCK CALLSIGN (ej: LW7EEA-7)");
+        return;
+    }
+
+    WA_LOCKED_DEST[message.from] = dest;
+    message.reply(`🔒 LOCK APRS activo → ${dest}`);
+    return;
+}
+
+
+    if (message.body.trim() === "#UNLOCK") {
+        delete WA_LOCKED_DEST[message.from];
+        message.reply("🔓 LOCK desactivado");
+        return;
+    }
+
+    /* ===== CLIMA ===== */
     if (message.body.trim().toUpperCase() === "#WX") {
         getCurrentSMNAlert(alert => {
-            if (!alert) {
-                message.reply("🌤 SMN: sin alertas meteorológicas vigentes");
-            } else {
-                message.reply(
-`🌩 ALERTA SMN (ACP)
-Zonas: ${alert.zonas.join(", ")}
-${alert.title}
-${alert.description.substring(0, 700)}`
-                );
-            }
+            if (!alert) message.reply("🌤 Sin alertas SMN");
+            else message.reply(`🌩 ALERTA SMN\n${alert.title}`);
         });
         return;
     }
 
-    console.log("MENSAJE RECIBIDO", message.from, message.body);
-
-    if (BLOCKED_IDS.includes(message.from)) {
-        message.reply("🚫 Estás bloqueado en este gateway APRS");
+    /* ===== MENSAJE CON LOCK ===== */
+    const locked = WA_LOCKED_DEST[message.from];
+    if (!message.body.startsWith("@") && !message.body.startsWith("#") && locked) {
+        sendAPRS(locked.padEnd(9), message.body);
+        message.reply("✅ Enviado");
         return;
     }
 
-    if (message.body.trim().toUpperCase() === "#HELP" || !message.body.startsWith("@")) {
+    if (!message.body.startsWith("@")) {
         message.reply(WELCOME_MESSAGE);
-        const fromWA = message.from.replace("@c.us", "");
-        sendAPRS(fromWA, WELCOME_MESSAGE);
         return;
     }
 
-    if (!message.body.startsWith("@")) return;
-
+    /* ===== @CALL ===== */
     const match = message.body.match(/^@([A-Z0-9\-]{3,9})\s+(.+)/i);
     if (!match) {
-        message.reply("❌ Formato inválido. Usá: @CALLSIGN mensaje");
+        message.reply("Formato inválido");
         return;
     }
 
-    const dest = match[1].toUpperCase();
-    const text = match[2].substring(0, 67);
-
-    let fromWA = message.from.replace("@c.us", "");
-    let contact = await client.getContactById(message.from);
-    let senderName = CONTACTS[fromWA] || contact.pushname || fromWA;
-
-    const aprsText = `Mensaje de ${senderName}: ${text}`;
-    const packet = `${CALLSIGN}>APRS::${dest.padEnd(9)}:${aprsText.substring(0, 67)}\n`;
-
-    console.log("📡 ENVIANDO A APRS:", packet.trim());
-    if (aprs) aprs.write(packet);
-
+    sendAPRS(match[1].toUpperCase().padEnd(9), match[2]);
     message.reply("✅ Enviado a APRS");
 });
 
-// ================= QR y Ready =================
-client.on('qr', qr => qrcode.generate(qr, { small: true }));
+/* ================= ACK WhatsApp ================= */
+client.on('message_ack', (msg, ack) => {
+    const id = msg.id?._serialized;
+    if (!sentMessages[id]) return;
 
-client.on('ready', () => {
-    console.log("WhatsApp conectado");
-    connectAPRS();
+    const info = sentMessages[id];
+    if (ack === 2) sendAPRS(info.from, "✔ ENTREGADO en WhatsApp");
+    if (ack === 3) {
+        sendAPRS(info.from, "✔✔ LEÍDO en WhatsApp");
+        delete sentMessages[id];
+    }
+});
 
-    setInterval(() => {
-        checkWeatherAlerts(
-            msg => {
-                // WhatsApp broadcast (admin o lista)
-                client.sendMessage("5492921401356@c.us", msg);
-            },
-            msg => {
-                //sendAPRS("ALL", msg);
-                broadcastAPRS(msg);
+/* ================= APRS ================= */
+let aprs;
 
+function connectAPRS() {
+    aprs = net.createConnection(APRS_PORT, APRS_SERVER, () => {
+        aprs.write(`user ${CALLSIGN} pass ${APRS_PASS} vers WA-GATE 1.0\n`);
+        console.log("📡 Conectado APRS-IS");
+    });
+
+    aprs.on('data', data => {
+        data.toString().split("\n").forEach(raw => {
+            const line = raw.trim();
+            if (!line.includes(`::${CALLSIGN}`)) return;
+
+            const from = line.split(">")[0];
+            const msgPart = line.split(`::${CALLSIGN}`)[1];
+            const text = msgPart?.split(":")[1]?.split("{")[0]?.trim();
+            const msgId = msgPart?.match(/\{(\d+)$/)?.[1];
+
+            if (!text) return;
+
+            /* ===== LOCK APRS ===== */
+            if (text.startsWith("#LOCK ")) {
+                const dest = text.split(" ")[1]?.toUpperCase();
+                if (!CONTACTS[dest]) {
+                    sendAPRS(from, "❌ Alias inexistente");
+                } else {
+                    LOCKED_DEST[from] = dest;
+                    sendAPRS(from, `🔒 LOCK → ${dest}`);
+                }
+                if (msgId) sendACK(from, msgId);
+                return;
             }
-        );
-    }, 10 * 60 * 1000);
+
+            if (text === "#UNLOCK") {
+                delete LOCKED_DEST[from];
+                sendAPRS(from, "🔓 LOCK desactivado");
+                if (msgId) sendACK(from, msgId);
+                return;
+            }
+
+            /* ===== MENSAJE SIN COMANDO ===== */
+            if (!text.startsWith("@") && !text.startsWith("#")) {
+                const locked = LOCKED_DEST[from];
+                if (!locked) {
+                    sendAPRS(from, WELCOME_MESSAGE);
+                    if (msgId) sendACK(from, msgId);
+                    return;
+                }
+
+                const phone = CONTACTS[locked];
+                const chatId = "549" + phone.replace(/^549?/, "") + "@c.us";
+
+                client.sendMessage(chatId, `📡 APRS ${from}:\n${text}`)
+                    .then(m => sentMessages[m.id._serialized] = { from });
+
+                if (msgId) sendACK(from, msgId);
+                return;
+            }
+
+            /* ===== @CALL ===== */
+            if (text.startsWith("@")) {
+                const parts = text.substring(1).split(" ");
+                const alias = parts.shift().toUpperCase();
+                const phone = CONTACTS[alias];
+                if (!phone) {
+                    sendAPRS(from, "❌ Alias inexistente");
+                    if (msgId) sendACK(from, msgId);
+                    return;
+                }
+
+                const chatId = "549" + phone.replace(/^549?/, "") + "@c.us";
+                const msg = parts.join(" ");
+
+                client.sendMessage(chatId, `📡 APRS ${from}:\n${msg}`)
+                    .then(m => sentMessages[m.id._serialized] = { from });
+
+                if (msgId) sendACK(from, msgId);
+            }
+        });
+    });
+}
+
+/* ===== APRS UTILS ===== */
+function sendAPRS(dest, text) {
+    const packet = `${CALLSIGN}>APRS::${dest}:${text.substring(0,67)}\n`;
+    aprs.write(packet);
+    console.log("📤 APRS:", packet.trim());
+}
+
+function sendACK(dest, id) {
+    aprs.write(`${CALLSIGN}>APRS::${dest.padEnd(9)}:ack${id}\n`);
+}
+
+/* ===== START ===== */
+client.on('qr', qr => qrcode.generate(qr, { small: true }));
+client.on('ready', () => {
+    console.log("✅ WhatsApp listo");
+    connectAPRS();
 });
 
 client.initialize();
+
 
 // ===== ACK WhatsApp → APRS =====
 client.on('message_ack', (msg, ack) => {
@@ -249,13 +336,72 @@ function connectAPRS() {
                 sendACK(from, msgId);
                 continue;
             }
+//LOCK
+            if (text.startsWith("#LOCK ")) {
+    const dest = text.split(" ")[1]?.toUpperCase();
+
+    if (!dest || !/^[A-Z0-9\-]{3,9}$/.test(dest)) {
+        sendAPRS(from, "Uso: #LOCK CALLSIGN");
+        if (msgId) sendACK(from, msgId);
+        continue;
+    }
+
+    LOCKED_DEST[from] = dest;
+    sendAPRS(from, `🔒 LOCK activado → ${dest}`);
+    if (msgId) sendACK(from, msgId);
+    continue;
+}
+if (text === "#UNLOCK") {
+    if (!LOCKED_DEST[from]) {
+        sendAPRS(from, "🔓 No hay LOCK activo");
+    } else {
+        delete LOCKED_DEST[from];
+        sendAPRS(from, "🔓 LOCK desactivado");
+    }
+    if (msgId) sendACK(from, msgId);
+    continue;
+}
+//LOCK
 
             // ===== MENSAJE SIN COMANDO =====
-            if (!text.startsWith("#") && !text.startsWith("@")) {
-                sendAPRS(from, WELCOME_MESSAGE);
-                if (msgId) sendACK(from, msgId);
-                continue;
-            }
+// ===== MENSAJE DIRECTO O CON LOCK =====
+if (!text.startsWith("#") && !text.startsWith("@")) {
+
+    // ¿Hay LOCK activo?
+    const locked = LOCKED_DEST[from];
+
+    if (!locked) {
+        sendAPRS(from, WELCOME_MESSAGE);
+        if (msgId) sendACK(from, msgId);
+        continue;
+    }
+
+    // Enviar como si fuera @DEST mensaje
+    const phone = CONTACTS[locked];
+    if (!phone) {
+        sendAPRS(from, `❌ Alias ${locked} no encontrado`);
+        delete LOCKED_DEST[from];
+        if (msgId) sendACK(from, msgId);
+        continue;
+    }
+
+    let phoneFull = phone;
+    if (!phoneFull.startsWith("54")) phoneFull = "549" + phoneFull;
+    const chatId = phoneFull + "@c.us";
+
+    console.log("🔒 LOCK APRS → WhatsApp:", locked, text);
+
+    client.sendMessage(
+        chatId,
+        `📡 Mensaje recibido vía APRS (${from}):\n*${text}*`
+    ).then(sentMsg => {
+        sentMessages[sentMsg.id._serialized] = { aprsFrom: from, text };
+    });
+
+    if (msgId) sendACK(from, msgId);
+    continue;
+}
+
 
             // ===== COMANDOS APRS =====
             if (text === "#HELP" || text === "#START") {
