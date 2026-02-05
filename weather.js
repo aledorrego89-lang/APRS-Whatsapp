@@ -7,7 +7,7 @@ const STATE_FILE = "./alerts/state.json";
 
 // CONFIG
 // CONFIG
-const ZONAS_BUSCADAS = ["Bahía Blanca", "Coronel Dorrego", "Tres Arroyos"];
+const ZONAS_BUSCADAS = ["Bahía Blanca", "Coronel Dorrego", "Tres Arroyos", "Villarino", "Sierra de la ventana"];
 
 // ================= Estado =================
 function loadState() {
@@ -72,6 +72,7 @@ cb({
 
 // ================= CHEQUEO AUTOMÁTICO =================
 function checkWeatherAlerts(sendWA, sendAPRS) {
+  console.log("Chequeando alertas WX")
   fetchSMNRSS(feed => {
     if (!feed?.rss?.channel?.item) return;
 
@@ -94,16 +95,14 @@ function checkWeatherAlerts(sendWA, sendAPRS) {
         item.description?.toLowerCase().includes(zona.toLowerCase())
       );
 
-      const msg =
-`🌩 ALERTA SMN (ACP)
-Zonas: ${zonasAfectadas.join(", ")}
-${item.title}
-${item.description}`.substring(0, 240);
+    const msg = item.title.trim();
+
 
       console.log("🚨 Nueva alerta SMN:", msg);
 
-      sendWA(msg);
-      sendAPRS(msg);
+     sendWA(msg);
+
+sendAPRS(msg);
 
       state.last = key;
       saveState(state);
