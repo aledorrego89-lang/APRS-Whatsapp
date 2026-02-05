@@ -52,10 +52,10 @@ const client = new Client({
 
 
 const WELCOME_MESSAGE =
-`👋 Gateway APRS–WhatsApp LW7EEA
-WhatsApp → APRS: @CALL mensaje
-APRS → WhatsApp: @CALL mensaje | #NUM mensaje
-LOCK: #LOCK CALL | #UNLOCK
+`👋 Gateway APRS–WhatsApp LW7EEA.
+WhatsApp → APRS: @CALL-SSID mensaje.
+APRS → WhatsApp: @CALL mensaje | #NUM mensaje.
+LOCK: #LOCK CALL | #UNLOCK.
 Clima: #WX`;
 
 /* ================= WHATSAPP → APRS ================= */
