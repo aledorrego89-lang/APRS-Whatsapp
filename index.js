@@ -144,20 +144,32 @@ client.on("ready", () => {
 
 client.initialize();
 
-/* ===== ACK WhatsApp → APRS ===== */
 client.on("message_ack", (msg, ack) => {
     const id = msg.id?._serialized;
     if (!id || !sentMessages[id]) return;
 
     const info = sentMessages[id];
 
-    if (ack === 2) {
-        sendAPRS(info.aprsFrom, "✔ Mensaje ENTREGADO en WhatsApp");
-    }
+    // Ignorar ACKs viejos
+    if (ack <= info.lastAck) return;
 
+    info.lastAck = ack;
+
+    // PRIORIDAD ABSOLUTA: LEÍDO
     if (ack === 3) {
         sendAPRS(info.aprsFrom, "✔✔ Mensaje LEÍDO en WhatsApp");
         delete sentMessages[id];
+        return;
+    }
+
+    // ENTREGADO solo si NO fue leído
+    if (ack === 2) {
+        // esperamos un poco por si llega el leído
+        setTimeout(() => {
+            if (sentMessages[id] && sentMessages[id].lastAck === 2) {
+                sendAPRS(info.aprsFrom, "✔ Mensaje ENTREGADO en WhatsApp");
+            }
+        }, 2000); // 1.5s es suficiente
     }
 });
 
@@ -369,3 +381,4 @@ function checkAndBroadcastAlerts() {
     });
 }
 
+setInterval(checkAndBroadcastAlerts, ALERT_BROADCAST_INTERVAL);
