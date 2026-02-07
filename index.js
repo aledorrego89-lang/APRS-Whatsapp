@@ -52,7 +52,7 @@ const client = new Client({
 });
 
 const WELCOME_MESSAGE =
-    "👋 Gateway APRS–WhatsApp LW7EEA." +
+    "👋 Gateway LW7EEA." +
     "WhatsApp → APRS: @CALL-SSID mensaje" +
     "APRS → WhatsApp: @CALL msj ó #NUM msj" +
     "LOCK: #LOCK CALL | #UNLOCK" +
@@ -119,13 +119,7 @@ client.on("message", async message => {
 let aprs;
 
 /* ===== APRS UTILS ===== */
-// function sendAPRS(dest, text) {
-//     if (!aprs) return;
-//     const cleanText = text.replace(/\n/g, " ").trim();
-//     const packet = `${CALLSIGN}>APRS::${dest}:${cleanText}\n`;
-//     aprs.write(packet);
-//     console.log("📤 APRS OUT:", packet.trim());
-// }
+
 
 function sendAPRS(dest, text) {
     const packet = `${CALLSIGN}>APRS::${dest}:${text}\n`;
@@ -375,4 +369,3 @@ function checkAndBroadcastAlerts() {
     });
 }
 
-setInterval(checkAndBroadcastAlerts, ALERT_BROADCAST_INTERVAL);
