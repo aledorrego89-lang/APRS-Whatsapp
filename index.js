@@ -1,3 +1,4 @@
+require("dotenv").config();
 const { checkWeatherAlerts, getCurrentSMNAlert } = require("./alerts/weather");
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
@@ -17,6 +18,9 @@ const WA_LOCKED_DEST = {};   // WhatsApp → APRS { chatId: CALLSIGN }
 
 /* ===== TRACKING ACK ===== */
 const sentMessages = {};
+const COUNTER_FILE = "./aprs_counter.json";
+/* ===== TRACKING ACK RECIBIDOS ===== */
+const receivedAcks = new Set();
 
 /* ===== CONTACTOS ===== */
 let CONTACTS = {};
@@ -34,86 +38,233 @@ function saveContacts() {
     fs.writeFileSync(CONTACTS_FILE, JSON.stringify(CONTACTS, null, 2));
 }
 
-/* ===== WHATSAPP CLIENT ===== */
+
 const client = new Client({
     authStrategy: new LocalAuth(),
+    webVersionCache: {
+        type: 'none'
+    },
     puppeteer: {
-        executablePath: "/usr/bin/chromium-browser",
+        executablePath: '/usr/bin/chromium-browser',
         headless: true,
         args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-        //    "--single-process",
-         //   "--no-zygote"
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage'
         ]
     }
 });
 
+
+
 const WELCOME_MESSAGE =
-    "👋 Gateway LW7EEA." +
-    "WhatsApp → APRS: @CALL-SSID mensaje" +
-    "APRS → WhatsApp: @CALL msj ó #NUM msj" +
-    "LOCK: #LOCK CALL | #UNLOCK" +
-    "Clima: #WX";
+    "👋Bienvenido al Gateway LW7EEA. " +
+    "Para recibir instrucciones de uso: #HELP. " +
+      "En constante desarrollo. " +
+    "Febreo 2026";
 
 /* ================= WHATSAPP → APRS ================= */
 client.on("message", async message => {
+
+/* ===== ALERTAS ON/OFF ===== */
+if (message.body.trim().toUpperCase() === "#ALERT ON" ||
+    message.body.trim().toUpperCase() === "#ALERT OFF") {
+
+    const turnOn = message.body.trim().toUpperCase() === "#ALERT ON";
+const contactObj = await message.getContact();
+const senderNumber = contactObj.number;
+
+console.log("Numero real:", senderNumber);
+
+
+
+const cleanSender = senderNumber.replace(/\D/g, "");
+
+
+console.log("Numero limpio:", senderNumber);
+
+
+
+const alias = Object.keys(CONTACTS).find(key => {
+    const contact = CONTACTS[key];
+
+    const phone =
+        typeof contact === "string"
+            ? contact
+            : contact?.phone;
+
+    console.log("Comparando contra:", phone);
+
+    if (!phone) return false;
+
+    const cleanPhone = phone.replace(/\D/g, "");
+
+return cleanPhone === cleanSender;
+
+});
+
+console.log("Numero recibido:", senderNumber);
+console.log("Agenda:", CONTACTS);
+console.log("Alias encontrado:", alias);
+
+
+    if (!alias) {
+        await safeReply(message, "❌ No estás registrado en la agenda");
+        return;
+    }
+
+    // Migración automática si estaba en formato viejo
+    if (typeof CONTACTS[alias] === "string") {
+        CONTACTS[alias] = {
+            phone: CONTACTS[alias],
+            alerts: false
+        };
+    }
+
+    CONTACTS[alias].alerts = turnOn;
+    saveContacts();
+
+    await safeReply(
+        message,
+        turnOn
+            ? "🌦 Alertas meteorológicas ACTIVADAS"
+            : "🔕 Alertas meteorológicas DESACTIVADAS"
+    );
+
+    return;
+}
+
+
 
     /* ===== LOCK WhatsApp ===== */
     if (message.body.startsWith("#LOCK ")) {
         const dest = message.body.split(" ")[1]?.toUpperCase();
 
         if (!dest || !/^[A-Z0-9]{3,6}(-\d{1,2})?$/.test(dest)) {
-            message.reply("❌ Uso: #LOCK CALLSIGN (ej: LW7EEA-7)");
+            await safeReply(message, "❌ Uso: #LOCK CALLSIGN (ej: LW7EEA-7)");
             return;
         }
 
         WA_LOCKED_DEST[message.from] = dest;
-        message.reply(`🔒 LOCK APRS activo → ${dest}`);
+        await safeReply(message, `🔒 LOCK APRS activo → ${dest}`);
         return;
     }
 
     if (message.body.trim() === "#UNLOCK") {
         delete WA_LOCKED_DEST[message.from];
-        message.reply("🔓 LOCK desactivado");
+        await safeReply(message, "🔓 LOCK desactivado");
         return;
     }
 
     /* ===== CLIMA ===== */
     if (message.body.trim().toUpperCase() === "#WX") {
-        getCurrentSMNAlert(alert => {
-            if (!alert) message.reply("🌤 Sin alertas SMN");
-            else message.reply(`🌩 ALERTA SMN\n${alert.title}`);
+        getCurrentSMNAlert(async alert => {
+            if (!alert) await safeReply(message, "🌤 Sin alertas SMN");
+            else await safeReply(message, `🌩 ALERTA SMN\n${alert.title}`);
         });
         return;
     }
 
+
+    /* ===== HELP ===== */
+if (message.body.trim().toUpperCase() === "#HELP" ||
+    message.body.trim().toUpperCase() === "#START") {
+
+await safeReply(message,
+    "👋 *Gateway LW7EEA*\n\n" +
+
+    "📡 *WhatsApp → APRS*\n" +
+    "• @CALL-SSID mensaje\n\n" +
+
+    "📲 *APRS → WhatsApp*\n" +
+    "• @CALL mensaje _(agendar antes)_\n" +
+    "• #NUM mensaje\n\n" +
+
+    "📒 *Agenda*\n" +
+      "Utilizar formato internacional sin + Ej: 5492921xxxxxx. \n" +
+    "• #SET CALL NUMERO _(agregar contacto)_\n" +
+    "• #RM CALL _(eliminar contacto)_\n\n" + 
+
+    "🔒 *LOCK*\n" +
+    "• #LOCK CALL\n" +
+    "• #UNLOCK\n\n" +
+
+    "🌦 *Alertas*\n" +
+    "• #WX\n" +
+      "• #ALERT ON _(wx automaticas)_\n" +
+        "• #ALERT OFF _(wx automaticas)_\n" +
+      "• _(al agendar un alias, por defecto estan desactivadas)_\n" +
+    "ℹ️ *Ayuda*\n" +
+    "• #HELP\n\n" +
+
+    "🔗 https://gist.github.com/aledorrego89-lang/675c86f9a6f769007491dcf740f5b590"
+);
+return;
+
+}
+
+/* ===== LIST AGENDA ===== */
+if (message.body.trim().toUpperCase() === "#LIST") {
+
+    const entries = Object.entries(CONTACTS);
+
+    if (entries.length === 0) {
+        await safeReply(message, "📒 La agenda está vacía");
+        return;
+    }
+
+    let text = "📒 *Agenda*\n\n";
+
+    for (const [call, number] of entries) {
+        text += `• ${call} → ${number}\n`;
+    }
+
+    await safeReply(message, text);
+    return;
+}
+
+
     /* ===== MENSAJE CON LOCK ===== */
     const locked = WA_LOCKED_DEST[message.from];
 
+    
+
     if (!message.body.startsWith("@") && !message.body.startsWith("#") && locked) {
         sendAPRS(locked.padEnd(9), message.body);
-        message.reply("✅ Enviado");
+        await safeReply(message, "✅ Enviado");
         return;
     }
 
     if (!message.body.startsWith("@")) {
-        message.reply(WELCOME_MESSAGE);
+        await safeReply(message, WELCOME_MESSAGE);
         return;
     }
 
     /* ===== @CALL ===== */
     const match = message.body.match(/^@([A-Z0-9\-]{3,9})\s+(.+)/i);
     if (!match) {
-        message.reply("Formato inválido");
+        await safeReply(message, "Formato inválido");
         return;
     }
 
-    sendAPRS(match[1].toUpperCase().padEnd(9), match[2]);
-    message.reply("✅ Enviado a APRS");
+sendAPRS(
+    match[1].toUpperCase().padEnd(9),
+    match[2],
+    message
+);
+
+await safeReply(message, "📤 Enviado a APRS (esperando ACK)");
 });
+
+async function safeReply(message, text) {
+    try {
+        await message.reply(text);
+    } catch (e) {
+        console.log("⚠ WhatsApp reply falló:", e.message);
+    }
+}
+
+
 
 /* ================= APRS ================= */
 let aprs;
@@ -121,11 +272,40 @@ let aprs;
 /* ===== APRS UTILS ===== */
 
 
-function sendAPRS(dest, text) {
-    const packet = `${CALLSIGN}>APRS::${dest}:${text}\n`;
-    aprs.write(packet);
-    console.log("📤 APRS:", packet.trim());
+let aprsMsgCounter = 1;
+
+if (fs.existsSync(COUNTER_FILE)) {
+    aprsMsgCounter = JSON.parse(fs.readFileSync(COUNTER_FILE)).counter || 1;
 }
+
+function nextAprsId() {
+    const id = aprsMsgCounter;
+
+    aprsMsgCounter++;
+    if (aprsMsgCounter > 999) aprsMsgCounter = 1;
+
+    fs.writeFileSync(COUNTER_FILE, JSON.stringify({ counter: aprsMsgCounter }));
+
+    return id;
+}
+
+function sendAPRS(dest, text, waMsg = null) {
+    const id = nextAprsId(); // SOLO mensajes nuevos
+    const packet = `${CALLSIGN}>APRS::${dest.padEnd(9)}:${text}{${id}\n`;
+    aprs.write(packet);
+
+    console.log("📤 APRS:", packet.trim());
+
+    if (waMsg) {
+        sentMessages[id] = {
+            waMsg,
+            dest,
+            time: Date.now()
+        };
+    }
+}
+
+
 
 function sendACK(dest, id) {
     if (!id || !aprs) return;
@@ -135,7 +315,29 @@ function sendACK(dest, id) {
 }
 
 /* ===== START ===== */
-client.on("qr", qr => qrcode.generate(qr, { small: true }));
+let ultimoQR = 0;
+const INTERVALO_QR = 5 * 60 * 1000; // 5 minutos
+
+client.on("qr", qr => {
+    const ahora = Date.now();
+
+    if (ahora - ultimoQR < INTERVALO_QR) {
+        console.log("⏱ QR ignorado (cooldown activo)");
+        return;
+    }
+
+    ultimoQR = ahora;
+
+    console.log("⚠ QR generado - sesión perdida");
+
+    qrcode.generate(qr, { small: true });
+
+    sendEmail(
+        "⚠ WhatsApp Gateway - REQUIERE QR",
+        "Se generó un nuevo código QR.\nLa sesión fue cerrada y requiere reautenticación."
+    );
+});
+
 
 client.on("ready", () => {
     console.log("✅ WhatsApp listo");
@@ -144,34 +346,62 @@ client.on("ready", () => {
 
 client.initialize();
 
+/* ===== EVENTOS DE SESIÓN WHATSAPP ===== */
+client.on("auth_failure", msg => {
+    console.log("❌ AUTH FAILURE:", msg);
+    sendEmail(
+        "⚠ WhatsApp Gateway AUTH FAILURE",
+        `Detalle:\n${msg}`
+    );
+});
+
+client.on("disconnected", reason => {
+    console.log("🔌 WA desconectado:", reason);
+    sendEmail(
+        "⚠ WhatsApp Gateway DESCONECTADO",
+        `Motivo:\n${reason}`
+    );
+});
+
+client.on("change_state", state => {
+    console.log("📶 Estado WA:", state);
+
+    if (state === "UNPAIRED" || state === "UNPAIRED_IDLE") {
+        sendEmail(
+            "⚠ WhatsApp Gateway - SESIÓN CERRADA",
+            `El cliente pasó a estado ${state}.\nSe requiere escanear nuevo QR.`
+        );
+    }
+});
+
+
+
 client.on("message_ack", (msg, ack) => {
     const id = msg.id?._serialized;
     if (!id || !sentMessages[id]) return;
 
     const info = sentMessages[id];
-
-    // Ignorar ACKs viejos
-    if (ack <= info.lastAck) return;
+    if (ack <= (info.lastAck || 0)) return;
 
     info.lastAck = ack;
 
-    // PRIORIDAD ABSOLUTA: LEÍDO
+    // LEÍDO
     if (ack === 3) {
         sendAPRS(info.aprsFrom, "✔✔ Mensaje LEÍDO en WhatsApp");
         delete sentMessages[id];
         return;
     }
 
-    // ENTREGADO solo si NO fue leído
+    // ENTREGADO
     if (ack === 2) {
-        // esperamos un poco por si llega el leído
         setTimeout(() => {
             if (sentMessages[id] && sentMessages[id].lastAck === 2) {
                 sendAPRS(info.aprsFrom, "✔ Mensaje ENTREGADO en WhatsApp");
             }
-        }, 2000); // 1.5s es suficiente
+        }, 2000);
     }
 });
+
 
 /* ================= APRS ================= */
 function connectAPRS() {
@@ -182,9 +412,28 @@ function connectAPRS() {
 
     aprs.on("error", err => console.log("APRS error:", err));
 
-    aprs.on("data", data => {
+ aprs.on("data", data => {
         data.toString().split("\n").forEach(raw => {
             const line = raw.trim();
+/* ===== ACK APRS ===== */
+const ackMatch = line.match(/::(.{9}):ack(\d+)/);
+if (ackMatch) {
+    const ackId = ackMatch[2];
+
+    // evitar procesar ACK duplicados
+    if (receivedAcks.has(ackId)) return;
+    receivedAcks.add(ackId);
+
+    const info = sentMessages[ackId];
+    if (info?.waMsg) {
+        info.waMsg.reply("✅ Entregado en APRS");
+        delete sentMessages[ackId];
+    }
+    return;
+}
+
+
+
             if (!line || !line.includes(`::${CALLSIGN}`)) return;
 
             const from = line.split(">")[0];
@@ -216,15 +465,21 @@ function handleAgenda(from, text, msgId) {
             return true;
         }
 
-        let phone = phoneRaw.startsWith("54") ? phoneRaw : "549" + phoneRaw;
-        if (!/^\d{11,15}$/.test(phone)) {
-                        sendACK(from, msgId);
+let phone = phoneRaw.replace(/\D/g, "");
 
-            sendAPRS(from, "Número inválido");
-            return true;
-        }
+if (!/^\d{8,15}$/.test(phone)) {
+    sendACK(from, msgId);
+    sendAPRS(from, "Número inválido. Usar formato internacional. Ej: 5492921401356");
+    return true;
+}
 
-        CONTACTS[call.toUpperCase()] = phone;
+
+    //    CONTACTS[call.toUpperCase()] = phone;
+    CONTACTS[call.toUpperCase()] = {
+    phone: phone,
+    alerts: false // por defecto desactivado
+};
+
         saveContacts();
                 sendACK(from, msgId);
 
@@ -292,17 +547,20 @@ function handleLock(from, text, msgId, lockDict) {
 
 function handleHelp(from, text, msgId) {
     if (text === "#HELP" || text === "#START") {
-   // 1️⃣ ACK inmediato
+
+        // ACK inmediato
         sendACK(from, msgId);
 
-        // 2️⃣ Respuesta después (opcionalmente con delay)
+        // respuesta informativa (mensaje NUEVO)
         setTimeout(() => {
-            sendAPRS(from, WELCOME_MESSAGE);
-        }, 2000);
+            sendAPRS(from, "https://gist.github.com/aledorrego89-lang/675c86f9a6f769007491dcf740f5b590");
+        }, 1500);
+
         return true;
     }
     return false;
 }
+
 
 function handleWX(from, text, msgId) {
     if (text === "#WX") {
@@ -338,15 +596,20 @@ function aprsToWA(from, text, msgId) {
         return;
     }
 
-    const phone = CONTACTS[alias];
-    if (!phone) {
-                sendACK(from, msgId);
+const contact = CONTACTS[alias];
 
-        sendAPRS(from, `❌ Alias ${alias} no encontrado`);
-        return;
-    }
+if (!contact) {
+    sendACK(from, msgId);
+    sendAPRS(from, `❌ Alias ${alias} no encontrado`);
+    return;
+}
 
-    const chatId = "549" + phone.replace(/^549?/, "") + "@c.us";
+const phone = typeof contact === "string"
+    ? contact
+    : contact.phone;
+
+const chatId = phone + "@c.us";
+
 
     console.log("📤 APRS → WhatsApp:", chatId, msg);
 
@@ -368,17 +631,77 @@ function aprsToWA(from, text, msgId) {
 
 
 /* ===== BROADCAST AUTOMÁTICO DE ALERTAS SMN ===== */
-const ALERT_BROADCAST_INTERVAL = 5 * 60 * 1000;
-const APRS_BROADCAST_DEST = "APRS";
+// const ALERT_BROADCAST_INTERVAL = 15 * 60 * 1000;
+// const APRS_BROADCAST_DEST = "APRS";
 
-function checkAndBroadcastAlerts() {
-    console.log("Check WX");
-    getCurrentSMNAlert(alert => {
-        if (!alert) return;
-        const message = `🌩 ALERTA SMN: ${alert.title}`;
-        console.log("📡 Broadcast APRS:", message);
-        sendAPRS(APRS_BROADCAST_DEST, message);
-    });
+// function checkAndBroadcastAlerts() {
+//     console.log("Check WX");
+//     getCurrentSMNAlert(alert => {
+//         if (!alert) return;
+//         const message = `🌩 ALERTA SMN: ${alert.title}`;
+//         console.log("📡 Broadcast APRS:", message);
+//         sendAPRS(APRS_BROADCAST_DEST, message);
+//     });
+// }
+
+//setInterval(checkAndBroadcastAlerts, ALERT_BROADCAST_INTERVAL);
+
+function broadcastWAAlert(alert) {
+    const text =
+        `🚨 *ALERTA METEOROLÓGICA SMN*\n\n` +
+        `📌 *${alert.title}*\n` +
+        `📍 Zonas: ${alert.zonas.join(", ")}\n\n` +
+        `${alert.description}`;
+
+   // for (const [alias, phone] of Object.entries(CONTACTS)) {
+   for (const [alias, data] of Object.entries(CONTACTS)) {
+
+    if (!data.alerts) continue; // SOLO suscritos
+
+const chatId = data.phone + "@c.us";
+
+
+        
+
+        client.sendMessage(chatId, text)
+            .then(() => console.log(`📲 Alerta enviada a ${alias}`))
+            .catch(e => console.log(`❌ Error WA ${alias}:`, e.message));
+    }
 }
 
-setInterval(checkAndBroadcastAlerts, ALERT_BROADCAST_INTERVAL);
+
+const WX_CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutos
+
+setInterval(() => {
+    console.log("Check WX");
+    checkWeatherAlerts(
+        broadcastWAAlert, // WhatsApp
+        () => {}           // APRS deshabilitado
+    );
+}, WX_CHECK_INTERVAL);
+
+
+
+const nodemailer = require("nodemailer");
+
+const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_PASS    }
+});
+
+async function sendEmail(subject, text) {
+    try {
+        await transporter.sendMail({
+            from: "aledorrego89@gmail.com",
+            to: "aledorrego89@gmail.com",
+            subject: subject,
+            text: text
+        });
+        console.log("📧 Mail enviado");
+    } catch (err) {
+        console.log("❌ Error enviando mail:", err);
+    }
+}
+//sendEmail("🧪 TEST Gateway", "Si recibís esto, el mail funciona correctamente.");
